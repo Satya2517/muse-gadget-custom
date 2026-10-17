@@ -52,6 +52,7 @@
 #include "esp_attr.h"
 #include "esp_crt_bundle.h"
 #include "esp_heap_caps.h"
+#include "esp_http_client.h"
 #include "esp_log.h"
 #include "esp_random.h"
 #include "esp_timer.h"
@@ -1508,6 +1509,143 @@ static void on_chat_ack(stream_t *s)
 
 /* ---- Turn: speech ---- */
 
+static void tts_data(const uint8_t *data, size_t len)
+{
+    if (s_turn.mp3_len + len > MP3_BUF) {
+        ESP_LOGW(TAG, "MP3 buffer full, dropping %u bytes", (unsigned)len);
+        len = MP3_BUF - s_turn.mp3_len;
+    }
+    mark(M_MP3);
+    memcpy(s_turn.mp3 + s_turn.mp3_len, data, len);
+    s_turn.mp3_len += len;
+}
+
+static void url_encode(const char *src, char *dst, size_t dst_len)
+{
+    static const char hex[] = "0123456789ABCDEF";
+    size_t d = 0;
+    for (size_t s = 0; src[s] && d + 4 < dst_len; s++) {
+        unsigned char c = (unsigned char)src[s];
+        if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') ||
+            c == '-' || c == '_' || c == '.' || c == '~') {
+            dst[d++] = c;
+        } else if (c == ' ') {
+            dst[d++] = '+';
+        } else {
+            dst[d++] = '%';
+            dst[d++] = hex[c >> 4];
+            dst[d++] = hex[c & 0x0F];
+        }
+    }
+    dst[d] = '\0';
+}
+
+static bool fetch_tts_chunk(const char *text_chunk)
+{
+    if (!text_chunk || !text_chunk[0]) {
+        return false;
+    }
+    char encoded[512];
+    url_encode(text_chunk, encoded, sizeof(encoded));
+
+    char url[600];
+    snprintf(url, sizeof(url), "http://translate.google.com/translate_tts?ie=UTF-8&q=%s&tl=en&client=tw-ob", encoded);
+
+    esp_http_client_config_t config = {};
+    config.url = url;
+    config.method = HTTP_METHOD_GET;
+    config.timeout_ms = 6000;
+    config.buffer_size = 2048;
+
+    esp_http_client_handle_t client = esp_http_client_init(&config);
+    if (!client) {
+        ESP_LOGE(TAG, "failed esp_http_client_init for TTS");
+        return false;
+    }
+    esp_http_client_set_header(client, "User-Agent", "Mozilla/5.0");
+
+    esp_err_t err = esp_http_client_open(client, 0);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "TTS open failed: %s", esp_err_to_name(err));
+        esp_http_client_cleanup(client);
+        return false;
+    }
+
+    esp_http_client_fetch_headers(client);
+    int status = esp_http_client_get_status_code(client);
+    if (status != 200) {
+        ESP_LOGW(TAG, "TTS HTTP status %d", status);
+        esp_http_client_close(client);
+        esp_http_client_cleanup(client);
+        return false;
+    }
+
+    char buf[1024];
+    int read_bytes;
+    size_t total = 0;
+    while ((read_bytes = esp_http_client_read(client, buf, sizeof(buf))) > 0) {
+        tts_data((const uint8_t *)buf, read_bytes);
+        total += read_bytes;
+    }
+
+    esp_http_client_close(client);
+    esp_http_client_cleanup(client);
+
+    ESP_LOGI(TAG, "TTS fetched %u bytes for: %s", (unsigned)total, text_chunk);
+    return total > 0;
+}
+
+static bool fetch_google_tts(const char *full_text)
+{
+    if (!full_text || !full_text[0]) {
+        return false;
+    }
+    size_t len = strlen(full_text);
+    size_t start = 0;
+    bool any_ok = false;
+
+    while (start < len) {
+        while (start < len && (full_text[start] == ' ' || full_text[start] == '\n' || full_text[start] == '\r')) {
+            start++;
+        }
+        if (start >= len) {
+            break;
+        }
+
+        size_t chunk_len = len - start;
+        if (chunk_len > 120) {
+            chunk_len = 120;
+            size_t best = 0;
+            for (size_t i = 30; i <= chunk_len; i++) {
+                char c = full_text[start + i];
+                if (c == '.' || c == '!' || c == '?' || c == ';' || c == '\n') {
+                    best = i + 1;
+                    break;
+                }
+                if (c == ',' || c == ' ') {
+                    best = i + 1;
+                }
+            }
+            if (best > 0) {
+                chunk_len = best;
+            }
+        }
+
+        char chunk[160];
+        if (chunk_len >= sizeof(chunk)) {
+            chunk_len = sizeof(chunk) - 1;
+        }
+        memcpy(chunk, full_text + start, chunk_len);
+        chunk[chunk_len] = '\0';
+        start += chunk_len;
+
+        if (fetch_tts_chunk(chunk)) {
+            any_ok = true;
+        }
+    }
+    return any_ok;
+}
+
 static void start_tts(void)
 {
     if (s_turn.tts_msg >= 0) {
@@ -1518,41 +1656,31 @@ static void start_tts(void)
         if (m.tts != TTS_QUEUED) {
             continue;
         }
-        /*
-         * Replies are text, shown at reading pace: silence in place of speech
-         * paces the captions and ends the turn. To speak them instead, send
-         * the message's text (s_turn.texts + i * TEXT_MAX, if texts was
-         * allocated; up to TEXT_MAX - 1 bytes) to a TTS API of your choice and
-         * play the MP3 it returns. In place of the silence below: keep
-         * m.tts = TTS_ACTIVE and s_turn.tts_msg = i, set s_turn.silent = false,
-         * m.pcm_start = s_turn.pcm_out, m.pcm_frames = 0, s_turn.mp3_len = 0,
-         * s_turn.mp3_ended = false, s_turn.kbps = 0, s_turn.down_rate = 0 and
-         * mp3dec_init(&s_turn.dec). Then, on this task, pass the MP3 to
-         * tts_data() as it arrives (it buffers up to MP3_BUF and drops the
-         * rest, so hold off while it's full) and set s_turn.mp3_ended at the
-         * end. decode() plays it at the speaker's volume, captions following,
-         * and finishes the message once it's drained.
-         */
+        const char *text = s_turn.texts ? (s_turn.texts + i * TEXT_MAX) : m.tail;
+        ESP_LOGI(TAG, "speaking message %s (%u chars): %s", m.id, (unsigned)m.len, text ? text : "");
+
         m.pcm_start = s_turn.pcm_out;
-        m.pcm_frames = (uint32_t)(m.len * MIC_RATE / TEXT_CHARS_PER_S);
+        m.pcm_frames = 0;
         m.tts = TTS_ACTIVE;
         s_turn.tts_msg = i;
-        s_turn.silent = true;
-        ESP_LOGI(TAG, "showing message %s (%u chars)", m.id, (unsigned)m.len);
+        s_turn.silent = false;
+        s_turn.mp3_len = 0;
+        s_turn.mp3_ended = false;
+        s_turn.kbps = 0;
+        s_turn.down_rate = 0;
+        mp3dec_init(&s_turn.dec);
         show_reply_start(m);
+
+        if (text && fetch_google_tts(text)) {
+            s_turn.mp3_ended = true;
+            ESP_LOGI(TAG, "TTS complete, buffered %u MP3 bytes", (unsigned)s_turn.mp3_len);
+        } else {
+            ESP_LOGW(TAG, "TTS failed or no text, fallback to silent reading");
+            m.pcm_frames = (uint32_t)(m.len * MIC_RATE / TEXT_CHARS_PER_S);
+            s_turn.silent = true;
+        }
         return;
     }
-}
-
-static void tts_data(const uint8_t *data, size_t len)
-{
-    if (s_turn.mp3_len + len > MP3_BUF) {
-        ESP_LOGW(TAG, "MP3 buffer full, dropping %u bytes", (unsigned)len);
-        len = MP3_BUF - s_turn.mp3_len;
-    }
-    mark(M_MP3);
-    memcpy(s_turn.mp3 + s_turn.mp3_len, data, len);
-    s_turn.mp3_len += len;
 }
 
 static void tts_end(stream_t *s, bool ok)

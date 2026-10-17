@@ -266,10 +266,20 @@ static esp_err_t audio_init(esp_codec_dev_handle_t *spk, esp_codec_dev_handle_t 
             .din = I2S_GPIO_UNUSED,
         },
     };
-    tx_std_cfg.slot_cfg.slot_bit_width = I2S_SLOT_BIT_WIDTH_32BIT;
-    tx_std_cfg.slot_cfg.ws_width = 32;
     ESP_RETURN_ON_ERROR(i2s_channel_init_std_mode(s_spk_chan, &tx_std_cfg), TAG, "spk std");
     ESP_RETURN_ON_ERROR(i2s_channel_enable(s_spk_chan), TAG, "spk on");
+
+    /* Quick 100ms startup tone to verify speaker audio path */
+    int16_t beep[320];
+    for (int i = 0; i < 160; i++) {
+        int16_t v = (i % 32 < 16) ? 7000 : -7000;
+        beep[2 * i] = v;
+        beep[2 * i + 1] = v;
+    }
+    size_t wrote;
+    for (int k = 0; k < 10; k++) {
+        i2s_channel_write(s_spk_chan, beep, sizeof(beep), &wrote, 100);
+    }
 
     /* RX (Mic) */
     i2s_chan_config_t rx_chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(MIC_I2S_NUM, I2S_ROLE_MASTER);

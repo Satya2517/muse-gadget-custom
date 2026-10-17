@@ -47,7 +47,7 @@ static struct {
 } s = {
     .volume = CONFIG_MUSE_DEFAULT_VOLUME,
     .speaker_on = true,
-    .mic_gain = 30,
+    .mic_gain = 25,
     .brightness = 100,
     .sleep_s = 120,
     .wifi_on = true,

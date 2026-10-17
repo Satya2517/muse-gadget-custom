@@ -78,7 +78,7 @@ static muse_gpio_button_t s_talk;
 static i2s_chan_handle_t s_spk_chan = NULL;
 static i2s_chan_handle_t s_mic_chan = NULL;
 
-static int s_mic_gain_q8 = 256;
+static int s_mic_gain_q8 = 1144; /* 25 dB default */
 static int32_t s_mic_dc[2] = {0, 0};
 
 static esp_err_t init(void)
@@ -225,12 +225,12 @@ static int spk_write(const audio_codec_data_if_t *h, uint8_t *data, int size)
     int16_t *s = (int16_t *)data;
     int count = size / sizeof(int16_t);
     int vol = muse_settings_volume(); // 0..100
-    // Digital volume boost: 4.5x at max volume with hard limiting
-    int mult = (vol * 45) / 10;
+    // Clean digital volume boost: 1.8x at max volume with headroom limiting to eliminate bursting noise
+    int32_t mult = (vol * 18); // /1000
     for (int i = 0; i < count; i++) {
-        int32_t v = ((int32_t)s[i] * mult) / 100;
-        if (v > 32767) v = 32767;
-        else if (v < -32768) v = -32768;
+        int32_t v = ((int32_t)s[i] * mult) / 1000;
+        if (v > 28000) v = 28000;
+        else if (v < -28000) v = -28000;
         s[i] = (int16_t)v;
     }
     size_t wrote;
@@ -281,18 +281,6 @@ static esp_err_t audio_init(esp_codec_dev_handle_t *spk, esp_codec_dev_handle_t 
     ESP_RETURN_ON_ERROR(i2s_channel_init_std_mode(s_spk_chan, &tx_std_cfg), TAG, "spk std");
     ESP_RETURN_ON_ERROR(i2s_channel_enable(s_spk_chan), TAG, "spk on");
 
-    /* Quick 100ms startup tone to verify speaker audio path */
-    int16_t beep[320];
-    for (int i = 0; i < 160; i++) {
-        int16_t v = (i % 32 < 16) ? 7000 : -7000;
-        beep[2 * i] = v;
-        beep[2 * i + 1] = v;
-    }
-    size_t wrote;
-    for (int k = 0; k < 10; k++) {
-        i2s_channel_write(s_spk_chan, beep, sizeof(beep), &wrote, 100);
-    }
-
     /* RX (Mic) */
     i2s_chan_config_t rx_chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(MIC_I2S_NUM, I2S_ROLE_MASTER);
     ESP_RETURN_ON_ERROR(i2s_new_channel(&rx_chan_cfg, NULL, &s_mic_chan), TAG, "mic chan");
@@ -321,6 +309,7 @@ static esp_err_t audio_init(esp_codec_dev_handle_t *spk, esp_codec_dev_handle_t 
     *mic = esp_codec_dev_new(&in_cfg);
 
     muse_settings_set_volume(100);
+    muse_settings_set_mic_gain(25);
 
     return *spk && *mic ? ESP_OK : ESP_FAIL;
 }

@@ -27,10 +27,8 @@ jobs:
       - name: Prepare binaries
         run: |
           mkdir -p out/
-          cp build/bootloader/bootloader.bin out/
-          cp build/partition_table/partition-table.bin out/
-          cp build/ota_data_initial.bin out/ 2>/dev/null || true
-          cp build/muse-gadget.bin out/
+          find build -name "*.bin" -exec cp {} out/ \;
+          ls -la out/
 
       - name: Upload firmware artifacts
         uses: actions/upload-artifact@v4

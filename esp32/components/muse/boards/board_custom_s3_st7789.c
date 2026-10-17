@@ -30,6 +30,7 @@
 #include "muse_ui.h"
 #include "muse_voice.h"
 #include "muse_state.h"
+#include "muse_settings.h"
 
 #ifndef MUSE_AUDIO_RATE
 #define MUSE_AUDIO_RATE 16000
@@ -221,8 +222,19 @@ static int data_enable(const audio_codec_data_if_t *h, esp_codec_dev_type_t type
 static int spk_write(const audio_codec_data_if_t *h, uint8_t *data, int size)
 {
     (void)h;
+    int16_t *s = (int16_t *)data;
+    int count = size / sizeof(int16_t);
+    int vol = muse_settings_volume(); // 0..100
+    // Digital volume boost: 4.5x at max volume with hard limiting
+    int mult = (vol * 45) / 10;
+    for (int i = 0; i < count; i++) {
+        int32_t v = ((int32_t)s[i] * mult) / 100;
+        if (v > 32767) v = 32767;
+        else if (v < -32768) v = -32768;
+        s[i] = (int16_t)v;
+    }
     size_t wrote;
-    return i2s_channel_write(s_spk_chan, data, size, &wrote, portMAX_DELAY) == ESP_OK ? ESP_CODEC_DEV_OK : ESP_CODEC_DEV_WRITE_FAIL;
+    return i2s_channel_write(s_spk_chan, (uint8_t *)s, size, &wrote, portMAX_DELAY) == ESP_OK ? ESP_CODEC_DEV_OK : ESP_CODEC_DEV_WRITE_FAIL;
 }
 
 static int mic_read(const audio_codec_data_if_t *h, uint8_t *data, int size)
@@ -307,6 +319,8 @@ static esp_err_t audio_init(esp_codec_dev_handle_t *spk, esp_codec_dev_handle_t 
     esp_codec_dev_cfg_t in_cfg = { .dev_type = ESP_CODEC_DEV_TYPE_IN, .data_if = &mic_if };
     *spk = esp_codec_dev_new(&out_cfg);
     *mic = esp_codec_dev_new(&in_cfg);
+
+    muse_settings_set_volume(100);
 
     return *spk && *mic ? ESP_OK : ESP_FAIL;
 }

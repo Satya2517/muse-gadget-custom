@@ -90,27 +90,32 @@ static lv_display_t *display_start(lv_indev_t **touch)
 {
     *touch = NULL;
 
-    /* Backlight control via LEDC PWM */
-    const ledc_timer_config_t bl_timer = {
-        .speed_mode = LEDC_LOW_SPEED_MODE,
-        .duty_resolution = LEDC_TIMER_10_BIT,
-        .timer_num = LEDC_TIMER_0,
-        .freq_hz = 20000,
-        .clk_cfg = LEDC_AUTO_CLK,
+    /* Backlight: configure as direct GPIO output and turn ON */
+    gpio_config_t bl_cfg = {
+        .pin_bit_mask = (1ULL << LCD_BL),
+        .mode = GPIO_MODE_OUTPUT,
+        .pull_up_en = GPIO_PULLUP_ENABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type = GPIO_INTR_DISABLE,
     };
-    if (ledc_timer_config(&bl_timer) != ESP_OK) {
-        ESP_LOGE(TAG, "failed ledc timer config");
-    }
-    const ledc_channel_config_t bl_ch = {
-        .gpio_num = LCD_BL,
-        .speed_mode = LEDC_LOW_SPEED_MODE,
-        .channel = LEDC_CHANNEL_0,
-        .timer_sel = LEDC_TIMER_0,
-        .duty = 1023,
+    gpio_config(&bl_cfg);
+    gpio_set_level(LCD_BL, 1);
+
+    /* Hardware reset sequence (matching working Arduino driver) */
+    gpio_config_t rst_cfg = {
+        .pin_bit_mask = (1ULL << LCD_RST),
+        .mode = GPIO_MODE_OUTPUT,
+        .pull_up_en = GPIO_PULLUP_ENABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type = GPIO_INTR_DISABLE,
     };
-    if (ledc_channel_config(&bl_ch) != ESP_OK) {
-        ESP_LOGE(TAG, "failed ledc channel config");
-    }
+    gpio_config(&rst_cfg);
+    gpio_set_level(LCD_RST, 1);
+    vTaskDelay(pdMS_TO_TICKS(50));
+    gpio_set_level(LCD_RST, 0);
+    vTaskDelay(pdMS_TO_TICKS(50));
+    gpio_set_level(LCD_RST, 1);
+    vTaskDelay(pdMS_TO_TICKS(150));
 
     /* SPI bus initialization */
     const spi_bus_config_t bus = {
@@ -119,7 +124,7 @@ static lv_display_t *display_start(lv_indev_t **touch)
         .miso_io_num = GPIO_NUM_NC,
         .quadwp_io_num = GPIO_NUM_NC,
         .quadhd_io_num = GPIO_NUM_NC,
-        .max_transfer_sz = LCD_RES * DRAW_BUF_LINES * 2,
+        .max_transfer_sz = LCD_RES * LCD_RES * 2,
     };
     if (spi_bus_initialize(LCD_HOST, &bus, SPI_DMA_CH_AUTO) != ESP_OK) {
         ESP_LOGE(TAG, "failed spi_bus_initialize");
@@ -129,7 +134,7 @@ static lv_display_t *display_start(lv_indev_t **touch)
     const esp_lcd_panel_io_spi_config_t io_cfg = {
         .cs_gpio_num = LCD_CS,
         .dc_gpio_num = LCD_DC,
-        .spi_mode = 0,
+        .spi_mode = 3,                 /* ST7789 without CS pin requires Mode 3 */
         .pclk_hz = 40 * 1000 * 1000,
         .trans_queue_depth = 10,
         .lcd_cmd_bits = 8,
@@ -142,7 +147,7 @@ static lv_display_t *display_start(lv_indev_t **touch)
 
     const esp_lcd_panel_dev_config_t panel_cfg = {
         .reset_gpio_num = LCD_RST,
-        .rgb_ele_order = LCD_RGB_ELEMENT_ORDER_BGR,
+        .rgb_ele_order = LCD_RGB_ELEMENT_ORDER_RGB,
         .bits_per_pixel = 16,
     };
     if (esp_lcd_new_panel_st7789(s_io, &panel_cfg, &s_panel) != ESP_OK) {
@@ -198,8 +203,7 @@ static bool display_lock(int timeout_ms)
 
 static void set_brightness(int pct)
 {
-    ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, pct * 1023 / 100);
-    ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0);
+    gpio_set_level(LCD_BL, pct > 0 ? 1 : 0);
 }
 
 static void panel_sleep(bool sleep)
@@ -262,6 +266,8 @@ static esp_err_t audio_init(esp_codec_dev_handle_t *spk, esp_codec_dev_handle_t 
             .din = I2S_GPIO_UNUSED,
         },
     };
+    tx_std_cfg.slot_cfg.slot_bit_width = I2S_SLOT_BIT_WIDTH_32BIT;
+    tx_std_cfg.slot_cfg.ws_width = 32;
     ESP_RETURN_ON_ERROR(i2s_channel_init_std_mode(s_spk_chan, &tx_std_cfg), TAG, "spk std");
     ESP_RETURN_ON_ERROR(i2s_channel_enable(s_spk_chan), TAG, "spk on");
 

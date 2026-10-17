@@ -110,6 +110,8 @@ if(CONFIG_MUSE_ENABLED)
         list(APPEND srcs "boards/board_vn_s3_183.c")
     elseif(CONFIG_MUSE_BOARD_AI_PASSPORT)
         list(APPEND srcs "boards/board_ai_passport.c")
+    elseif(CONFIG_MUSE_BOARD_CUSTOM_S3_ST7789)
+        list(APPEND srcs "boards/board_custom_s3_st7789.c")
     endif()
     # Shared core, independent of board selection. Keep it after the BSP so
     # Watcher's independently retained recovery markers keep their link order.

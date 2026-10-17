@@ -113,6 +113,9 @@ menu "Muse"
         config MUSE_BOARD_AI_PASSPORT
             bool "FoloToy AI Passport (ESP32-C3, three buttons, no touch)"
             depends on IDF_TARGET_ESP32C3
+        config MUSE_BOARD_CUSTOM_S3_ST7789
+            bool "Custom ESP32-S3 (240x240 ST7789 LCD, INMP441 mic, MAX98357A speaker)"
+            depends on IDF_TARGET_ESP32S3
     endchoice
 
     config MUSE_ENABLED
@@ -123,6 +126,7 @@ menu "Muse"
     # idf_component.yml rules can select each board's managed components.
     config MUSE_BOARD_ID
         string
+        default "custom_s3_st7789" if MUSE_BOARD_CUSTOM_S3_ST7789
         default "waveshare_s3_175c" if MUSE_BOARD_WAVESHARE_S3_175C
         default "waveshare_s3_175" if MUSE_BOARD_WAVESHARE_S3_175
         default "ostb_echoear_2st" if MUSE_BOARD_OSTB_ECHOEAR_2ST

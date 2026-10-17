@@ -1,0 +1,40 @@
+name: Build Custom S3 ST7789 Firmware
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build Custom S3 ST7789
+    runs-on: ubuntu-latest
+    container: espressif/idf:v6.0.1
+    defaults:
+      run:
+        shell: bash
+        working-directory: esp32
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Build firmware
+        run: |
+          . "$IDF_PATH/export.sh" > /dev/null
+          idf.py -B build -DIDF_TARGET="esp32s3" -DSDKCONFIG=build/sdkconfig \
+            -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;devices/sdkconfig.muse;devices/sdkconfig.custom-s3-st7789" build
+
+      - name: Prepare binaries
+        run: |
+          mkdir -p out/
+          cp build/bootloader/bootloader.bin out/
+          cp build/partition_table/partition-table.bin out/
+          cp build/ota_data_initial.bin out/ 2>/dev/null || true
+          cp build/muse-gadget.bin out/
+
+      - name: Upload firmware artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: firmware-custom-s3-st7789
+          path: esp32/out/
+          retention-days: 7

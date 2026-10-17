@@ -24,10 +24,24 @@
 #include "esp_log.h"
 #include "esp_lv_adapter.h"
 
+#include "muse_audio.h"
 #include "muse_board.h"
+#include "muse_mem.h"
 #include "muse_ui.h"
 #include "muse_voice.h"
 #include "muse_state.h"
+
+#ifndef MUSE_AUDIO_RATE
+#define MUSE_AUDIO_RATE 16000
+#endif
+
+#ifndef MUSE_UI_CORE
+#define MUSE_UI_CORE 1
+#endif
+
+#ifndef MUSE_UI_PRIORITY
+#define MUSE_UI_PRIORITY 5
+#endif
 
 static const char *TAG = "custom_s3_st7789";
 
@@ -260,7 +274,7 @@ static esp_err_t audio_init(esp_codec_dev_handle_t *spk, esp_codec_dev_handle_t 
         .slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_STEREO),
         .gpio_cfg = {
             .mclk = I2S_GPIO_UNUSED,
-            .bclk = MIC_I2S_BCLK,
+            .bclk = MIC_I2S_SCK,
             .ws = MIC_I2S_WS,
             .dout = I2S_GPIO_UNUSED,
             .din = MIC_I2S_SD,
